@@ -17,8 +17,9 @@ class GraphState(TypedDict):
         generation:  The LLM-generated answer (populated after generate node).
         documents:   Retrieved or web-searched documents in context.
         web_search:  Flag set to "Yes" when web search is triggered.
-        steps:       Ordered list of node names visited (for tracing/debugging).
-        loop_step:   Counter to prevent infinite self-correction loops.
+        steps:                Ordered list of node names visited (for tracing/debugging).
+        generation_attempts:  Number of generation attempts made; caps at MAX_LOOP_STEPS
+                              to prevent infinite self-correction loops.
     """
 
     question: str
@@ -26,4 +27,4 @@ class GraphState(TypedDict):
     documents: List[Document]
     web_search: Literal["Yes", "No"]
     steps: Annotated[List[str], operator.add]
-    loop_step: int
+    generation_attempts: int
