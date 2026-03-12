@@ -22,9 +22,13 @@ from config import MAX_LOOP_STEPS
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
+from semantic_cache import SemanticCache
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
+
+# Module-level cache instance (shared across all run_pipeline calls)
+_cache = SemanticCache()
 
 # ---------------------------------------------------------------------------
 # Build graders / chains once (module-level singletons)
@@ -266,12 +270,19 @@ def run_pipeline(question: str) -> dict:
     """
     Execute the full CRAG + Self-RAG pipeline for a single question.
 
+    Checks the semantic cache first. If a sufficiently similar question was
+    previously answered, returns the cached result without running the graph.
+
     Args:
         question: Natural language question.
 
     Returns:
         Final graph state dict containing 'generation', 'documents', 'steps'.
     """
+    cached = _cache.get(question)
+    if cached is not None:
+        return cached
+
     app = get_app()
     initial_state: GraphState = {
         "question": question,
@@ -282,4 +293,5 @@ def run_pipeline(question: str) -> dict:
         "loop_step": 0,
     }
     final_state = app.invoke(initial_state)
+    _cache.set(question, final_state)
     return final_state
