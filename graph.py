@@ -56,7 +56,7 @@ def retrieve(state: GraphState) -> GraphState:
         "documents": documents,
         "question": question,
         "steps": ["retrieve"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -92,7 +92,7 @@ def grade_documents(state: GraphState) -> GraphState:
         "question": question,
         "web_search": web_search_needed,
         "steps": ["grade_documents"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -106,7 +106,7 @@ def transform_query(state: GraphState) -> GraphState:
         "question": better_question,
         "documents": state.get("documents", []),
         "steps": ["transform_query"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -121,7 +121,7 @@ def web_search_node(state: GraphState) -> GraphState:
         "documents": existing + web_docs,
         "question": question,
         "steps": ["web_search"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -130,7 +130,7 @@ def generate(state: GraphState) -> GraphState:
     print("---NODE: GENERATE---")
     question = state["question"]
     documents = state["documents"]
-    loop_step = state.get("loop_step", 0)
+    generation_attempts = state.get("generation_attempts", 0)
 
     generation = generate_answer(question, documents)
     print(f"  [generate] Answer (first 120 chars): {generation[:120]}...")
@@ -139,7 +139,7 @@ def generate(state: GraphState) -> GraphState:
         "question": question,
         "documents": documents,
         "steps": ["generate"],
-        "loop_step": loop_step + 1,
+        "generation_attempts": generation_attempts + 1,
     }
 
 
@@ -174,7 +174,7 @@ def grade_generation(
     question = state["question"]
     documents = state["documents"]
     generation = state["generation"]
-    loop_step = state.get("loop_step", 0)
+    generation_attempts = state.get("generation_attempts", 0)
 
     # --- Hallucination check ---
     docs_text = "\n\n".join(d.page_content for d in documents)
@@ -185,8 +185,8 @@ def grade_generation(
 
     if not grounded:
         print("  [hallucination] NOT grounded.")
-        if loop_step < MAX_LOOP_STEPS:
-            print(f"  → generate (retry {loop_step}/{MAX_LOOP_STEPS})")
+        if generation_attempts < MAX_LOOP_STEPS:
+            print(f"  → generate (retry {generation_attempts}/{MAX_LOOP_STEPS})")
             return "generate"
         else:
             print("  → transform_query (max retries reached, falling back to web search)")
@@ -279,7 +279,7 @@ def run_pipeline(question: str) -> dict:
         "documents": [],
         "web_search": "No",
         "steps": [],
-        "loop_step": 0,
+        "generation_attempts": 0,
     }
     final_state = app.invoke(initial_state)
     return final_state
