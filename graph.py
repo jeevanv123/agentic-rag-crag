@@ -14,7 +14,8 @@ Flow:
 
 from __future__ import annotations
 
-from typing import Literal
+import asyncio
+from typing import AsyncGenerator, Literal
 
 from langgraph.graph import END, StateGraph
 
@@ -283,3 +284,38 @@ def run_pipeline(question: str) -> dict:
     }
     final_state = app.invoke(initial_state)
     return final_state
+
+
+async def stream_pipeline(question: str) -> AsyncGenerator[str, None]:
+    """
+    Stream the answer token-by-token as the generate node runs.
+
+    All upstream nodes (retrieve, grade, web search) run synchronously
+    and silently. Once the generate node starts, tokens are yielded as
+    they arrive from the LLM so the user sees output immediately.
+
+    Args:
+        question: Natural language question.
+
+    Yields:
+        Individual text tokens from the LLM as they are generated.
+    """
+    app = get_app()
+    initial_state: GraphState = {
+        "question": question,
+        "generation": "",
+        "documents": [],
+        "web_search": "No",
+        "steps": [],
+        "loop_step": 0,
+    }
+
+    async for event in app.astream_events(initial_state, version="v2"):
+        # Only emit tokens from the generate node's LLM call
+        if (
+            event["event"] == "on_chat_model_stream"
+            and event.get("metadata", {}).get("langgraph_node") == "generate"
+        ):
+            chunk = event["data"].get("chunk")
+            if chunk and chunk.content:
+                yield chunk.content

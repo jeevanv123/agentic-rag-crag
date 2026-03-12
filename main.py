@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import os
 
 from dotenv import load_dotenv
@@ -72,7 +73,10 @@ def ingest(urls=None) -> None:
     print("Ingestion complete.")
 
 
-def answer(question: str) -> str:
+def answer(question: str, stream: bool = False) -> str:
+    if stream:
+        return asyncio.run(_stream_answer(question))
+
     from graph import run_pipeline
     result = run_pipeline(question)
     generation = result.get("generation", "No answer generated.")
@@ -89,6 +93,21 @@ def answer(question: str) -> str:
     print(f"Sources  : {', '.join(sources) if sources else 'none'}")
     print("=" * 60)
     return generation
+
+
+async def _stream_answer(question: str) -> str:
+    """Stream answer tokens to stdout and return the full assembled answer."""
+    from graph import stream_pipeline
+    print(f"\nQuestion : {question}")
+    print("Answer   : ", end="", flush=True)
+
+    tokens = []
+    async for token in stream_pipeline(question):
+        print(token, end="", flush=True)
+        tokens.append(token)
+
+    print()  # newline after streaming completes
+    return "".join(tokens)
 
 
 def run_eval() -> None:
@@ -113,8 +132,9 @@ def visualise() -> None:
         print(app.get_graph().draw_mermaid())
 
 
-def interactive() -> None:
-    print("Agentic RAG + CRAG + Self-RAG  |  type 'exit' to quit\n")
+def interactive(stream: bool = False) -> None:
+    mode = " [streaming]" if stream else ""
+    print(f"Agentic RAG + CRAG + Self-RAG{mode}  |  type 'exit' to quit\n")
     while True:
         try:
             q = input("Question: ").strip()
@@ -126,7 +146,7 @@ def interactive() -> None:
         if q.lower() in {"exit", "quit", "q"}:
             print("Bye!")
             break
-        answer(q)
+        answer(q, stream=stream)
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +162,7 @@ def main() -> None:
     parser.add_argument("--ingest", action="store_true", help="Index sample URLs into ChromaDB")
     parser.add_argument("--eval", action="store_true", help="Run RAGAS evaluation")
     parser.add_argument("--question", "-q", type=str, help="Answer a single question")
+    parser.add_argument("--stream", action="store_true", help="Stream answer tokens as they arrive")
     parser.add_argument("--visualise", action="store_true", help="Save graph diagram")
     args = parser.parse_args()
 
@@ -150,11 +171,11 @@ def main() -> None:
     elif args.eval:
         run_eval()
     elif args.question:
-        answer(args.question)
+        answer(args.question, stream=args.stream)
     elif args.visualise:
         visualise()
     else:
-        interactive()
+        interactive(stream=args.stream)
 
 
 if __name__ == "__main__":
