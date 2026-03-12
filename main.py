@@ -18,6 +18,40 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# LangSmith tracing — activated automatically when env vars are present
+# ---------------------------------------------------------------------------
+
+def _setup_langsmith() -> None:
+    """
+    Log whether LangSmith tracing is active.
+
+    LangChain reads LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY, and
+    LANGCHAIN_PROJECT from the environment automatically — no extra code
+    is needed to enable tracing. This function just surfaces the status
+    so operators know at a glance whether traces will be sent.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    tracing_on = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+    if tracing_on:
+        api_key_present = bool(os.getenv("LANGCHAIN_API_KEY"))
+        project = os.getenv("LANGCHAIN_PROJECT", "default")
+        if api_key_present:
+            log.info("LangSmith tracing ENABLED | project=%r", project)
+        else:
+            log.warning(
+                "LANGCHAIN_TRACING_V2=true but LANGCHAIN_API_KEY is not set — "
+                "traces will NOT be sent."
+            )
+    else:
+        log.info(
+            "LangSmith tracing DISABLED. "
+            "Set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY to enable."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Validation: fail fast if required keys are missing
 # ---------------------------------------------------------------------------
 _REQUIRED_ENV = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "TAVILY_API_KEY"]
@@ -134,8 +168,6 @@ def interactive() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    _check_env()
-
     parser = argparse.ArgumentParser(
         description="Agentic RAG with CRAG + Self-RAG self-correction"
     )
@@ -144,6 +176,9 @@ def main() -> None:
     parser.add_argument("--question", "-q", type=str, help="Answer a single question")
     parser.add_argument("--visualise", action="store_true", help="Save graph diagram")
     args = parser.parse_args()
+
+    _check_env()
+    _setup_langsmith()
 
     if args.ingest:
         ingest()
