@@ -4,6 +4,7 @@ ChromaDB vector store — document ingestion and similarity retrieval.
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import chromadb
@@ -18,6 +19,8 @@ from config import (
     CHROMA_PERSIST_DIR,
     RETRIEVAL_K,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _get_embeddings() -> AzureOpenAIEmbeddings:
@@ -54,7 +57,7 @@ def ingest_documents(documents: List[Document]) -> Chroma:
         collection_name=CHROMA_COLLECTION_NAME,
         persist_directory=CHROMA_PERSIST_DIR,
     )
-    print(f"[vector_store] Ingested {len(documents)} document chunks into ChromaDB.")
+    logger.info("Ingested %d document chunks into ChromaDB.", len(documents))
     return vector_store
 
 
@@ -72,19 +75,53 @@ def load_and_index_urls(urls: List[str]) -> Chroma:
     """
     Convenience helper: load web pages, split, and index them.
 
+    Each URL is fetched individually so a single failure does not abort the
+    entire batch. Failed URLs are logged as warnings and skipped.
+
     Args:
         urls: List of public URLs to fetch and index.
 
     Returns:
-        Populated Chroma vector store.
+        Populated Chroma vector store (may be partial if some URLs failed).
+
+    Raises:
+        ValueError: If no URLs could be loaded at all.
     """
     from langchain_community.document_loaders import WebBaseLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    loader = WebBaseLoader(urls)
-    raw_docs = loader.load()
-
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = splitter.split_documents(raw_docs)
+    all_chunks: List = []
+    failed: List[str] = []
 
-    return ingest_documents(chunks)
+    for url in urls:
+        try:
+            raw_docs = WebBaseLoader([url]).load()
+            if not raw_docs:
+                logger.warning("No content returned for URL: %s — skipping.", url)
+                failed.append(url)
+                continue
+            chunks = splitter.split_documents(raw_docs)
+            logger.info("Loaded %d chunks from %s", len(chunks), url)
+            all_chunks.extend(chunks)
+        except Exception as exc:
+            logger.warning("Failed to load URL %s: %s — skipping.", url, exc)
+            failed.append(url)
+
+    if failed:
+        logger.warning(
+            "%d/%d URL(s) failed to load: %s",
+            len(failed), len(urls), ", ".join(failed),
+        )
+
+    if not all_chunks:
+        raise ValueError(
+            f"No content could be loaded from any of the {len(urls)} provided URL(s). "
+            "Check network access and URL validity."
+        )
+
+    logger.info(
+        "Total: %d chunks from %d/%d URLs.",
+        len(all_chunks), len(urls) - len(failed), len(urls),
+    )
+    return ingest_documents(all_chunks)
