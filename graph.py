@@ -2,7 +2,7 @@
 LangGraph workflow — CRAG + Self-RAG agentic pipeline.
 
 Flow:
-  retrieve → grade_documents
+  retrieve → rerank → grade_documents
                ├─ all irrelevant → transform_query → web_search → generate
                └─ some relevant  → generate
                                       ├─ hallucinated (& loop < MAX) → generate (retry)
@@ -22,6 +22,7 @@ from config import MAX_LOOP_STEPS
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
+from reranker import rerank_documents
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
@@ -56,6 +57,25 @@ def retrieve(state: GraphState) -> GraphState:
         "documents": documents,
         "question": question,
         "steps": ["retrieve"],
+        "loop_step": state.get("loop_step", 0),
+    }
+
+
+def rerank(state: GraphState) -> GraphState:
+    """
+    Rerank retrieved documents against the question using a local cross-encoder.
+
+    Runs after retrieve and before grade_documents so the LLM grader receives
+    the most relevant chunks first. Passes through unchanged if reranking is
+    disabled or fails.
+    """
+    question = state["question"]
+    documents = state["documents"]
+    reranked = rerank_documents(question, documents)
+    return {
+        "documents": reranked,
+        "question": question,
+        "steps": ["rerank"],
         "loop_step": state.get("loop_step", 0),
     }
 
@@ -216,6 +236,7 @@ def build_graph() -> StateGraph:
 
     # --- Nodes ---
     workflow.add_node("retrieve", retrieve)
+    workflow.add_node("rerank", rerank)
     workflow.add_node("grade_documents", grade_documents)
     workflow.add_node("transform_query", transform_query)
     workflow.add_node("web_search", web_search_node)
@@ -223,7 +244,8 @@ def build_graph() -> StateGraph:
 
     # --- Edges ---
     workflow.set_entry_point("retrieve")
-    workflow.add_edge("retrieve", "grade_documents")
+    workflow.add_edge("retrieve", "rerank")
+    workflow.add_edge("rerank", "grade_documents")
 
     workflow.add_conditional_edges(
         "grade_documents",

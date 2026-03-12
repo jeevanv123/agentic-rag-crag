@@ -6,6 +6,9 @@ langchain-community>=0.3.0
 langchain-chroma>=0.1.4
 langgraph>=0.2.0
 
+# Reranking (local cross-encoder — no API key needed)
+flashrank>=0.2.0
+
 # Vector store
 chromadb>=0.5.0
 
