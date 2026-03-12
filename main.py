@@ -91,13 +91,13 @@ def answer(question: str) -> str:
     return generation
 
 
-def run_eval() -> None:
+def run_eval(output_csv: str | None = None) -> None:
     from evaluator import EvalSample, evaluate_pipeline
     samples = [
         EvalSample(question=s["question"], ground_truth=s["ground_truth"])
         for s in EVAL_SAMPLES
     ]
-    evaluate_pipeline(samples)
+    evaluate_pipeline(samples, output_csv=output_csv)
 
 
 def visualise() -> None:
@@ -141,6 +141,7 @@ def main() -> None:
     )
     parser.add_argument("--ingest", action="store_true", help="Index sample URLs into ChromaDB")
     parser.add_argument("--eval", action="store_true", help="Run RAGAS evaluation")
+    parser.add_argument("--eval-output", type=str, metavar="FILE", help="Save eval results to CSV")
     parser.add_argument("--question", "-q", type=str, help="Answer a single question")
     parser.add_argument("--visualise", action="store_true", help="Save graph diagram")
     args = parser.parse_args()
@@ -148,7 +149,7 @@ def main() -> None:
     if args.ingest:
         ingest()
     elif args.eval:
-        run_eval()
+        run_eval(output_csv=args.eval_output)
     elif args.question:
         answer(args.question)
     elif args.visualise:

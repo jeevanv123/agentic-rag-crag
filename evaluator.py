@@ -10,9 +10,12 @@ Metrics evaluated:
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+from tqdm import tqdm
 from ragas import evaluate, EvaluationDataset, SingleTurnSample
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
@@ -29,6 +32,8 @@ from config import (
     GRADER_MODEL, AZURE_EMBEDDING_DEPLOYMENT,
 )
 from graph import run_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -81,13 +86,15 @@ class EvalSample:
 def evaluate_pipeline(
     samples: List[EvalSample],
     metrics=None,
+    output_csv: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Run the RAG pipeline on each sample and evaluate with RAGAS v0.4+.
 
     Args:
-        samples: List of EvalSample objects with questions and ground truths.
-        metrics: RAGAS metric instances (defaults to the four standard metrics).
+        samples:    List of EvalSample objects with questions and ground truths.
+        metrics:    RAGAS metric instances (defaults to the four standard metrics).
+        output_csv: Optional file path to save per-sample results as CSV.
 
     Returns:
         DataFrame with per-sample and aggregate RAGAS scores.
@@ -106,8 +113,8 @@ def evaluate_pipeline(
 
     ragas_samples: List[SingleTurnSample] = []
 
-    for sample in samples:
-        print(f"\n[evaluator] Running pipeline for: '{sample.question}'")
+    for sample in tqdm(samples, desc="Running pipeline", unit="sample"):
+        logger.info("Evaluating: %r", sample.question)
         result = run_pipeline(sample.question)
 
         retrieved_contexts = (
@@ -126,11 +133,8 @@ def evaluate_pipeline(
 
     dataset = EvaluationDataset(samples=ragas_samples)
 
-    print("\n[evaluator] Running RAGAS evaluation…")
-    ragas_result = evaluate(
-        dataset=dataset,
-        metrics=metrics,
-    )
+    logger.info("Running RAGAS evaluation on %d samples…", len(ragas_samples))
+    ragas_result = evaluate(dataset=dataset, metrics=metrics)
     scores_df = ragas_result.to_pandas()
 
     # Normalise column names across RAGAS versions
@@ -142,15 +146,23 @@ def evaluate_pipeline(
     }
     scores_df = scores_df.rename(columns=col_map)
 
-    metric_cols = [c for c in ["faithfulness", "answer_relevancy",
-                                "context_precision", "context_recall"] if c in scores_df.columns]
+    metric_cols = [
+        c for c in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+        if c in scores_df.columns
+    ]
 
     print("\n=== RAGAS Evaluation Results ===")
-    display_cols = ["question"] + metric_cols if "question" in scores_df.columns else metric_cols
+    display_cols = (["question"] + metric_cols) if "question" in scores_df.columns else metric_cols
     print(scores_df[display_cols].to_string(index=False))
     print("\nAggregate means:")
     numeric_cols = scores_df[metric_cols].select_dtypes("number").columns
     print(scores_df[numeric_cols].mean().to_string())
+
+    if output_csv:
+        out_path = Path(output_csv)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        scores_df.to_csv(out_path, index=False)
+        logger.info("Results saved to %s", out_path)
 
     return scores_df
 
