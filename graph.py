@@ -22,6 +22,7 @@ from config import MAX_LOOP_STEPS
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
+from retry import with_retry
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
@@ -41,6 +42,30 @@ def _get_retriever():
     if _retriever is None:
         _retriever = get_retriever()
     return _retriever
+
+
+# ---------------------------------------------------------------------------
+# Retry-protected wrappers around chain .invoke() calls
+# ---------------------------------------------------------------------------
+
+@with_retry
+def _grade_document(question: str, document: str):
+    return _doc_grader.invoke({"question": question, "document": document})
+
+
+@with_retry
+def _grade_hallucination(documents: str, generation: str):
+    return _hallucination_grader.invoke({"documents": documents, "generation": generation})
+
+
+@with_retry
+def _grade_answer(question: str, generation: str):
+    return _answer_grader.invoke({"question": question, "generation": generation})
+
+
+@with_retry
+def _rewrite_query(question: str) -> str:
+    return _query_rewriter.invoke({"question": question})
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +98,7 @@ def grade_documents(state: GraphState) -> GraphState:
     web_search_needed = "No"
 
     for doc in documents:
-        score = _doc_grader.invoke(
-            {"question": question, "document": doc.page_content}
-        )
+        score = _grade_document(question, doc.page_content)
         if score.binary_score.lower() == "yes":
             print(f"  [grade] RELEVANT: {doc.metadata.get('source', 'unknown')}")
             filtered_docs.append(doc)
@@ -100,7 +123,7 @@ def transform_query(state: GraphState) -> GraphState:
     """Rewrite the question for a better web search."""
     print("---NODE: TRANSFORM QUERY---")
     question = state["question"]
-    better_question = _query_rewriter.invoke({"question": question})
+    better_question = _rewrite_query(question)
     print(f"  [rewrite] '{question}' → '{better_question}'")
     return {
         "question": better_question,
@@ -178,9 +201,7 @@ def grade_generation(
 
     # --- Hallucination check ---
     docs_text = "\n\n".join(d.page_content for d in documents)
-    hall_score = _hallucination_grader.invoke(
-        {"documents": docs_text, "generation": generation}
-    )
+    hall_score = _grade_hallucination(docs_text, generation)
     grounded = hall_score.binary_score.lower() == "yes"
 
     if not grounded:
@@ -195,9 +216,7 @@ def grade_generation(
     print("  [hallucination] Grounded ✓")
 
     # --- Answer quality check ---
-    ans_score = _answer_grader.invoke(
-        {"question": question, "generation": generation}
-    )
+    ans_score = _grade_answer(question, generation)
     if ans_score.binary_score.lower() == "yes":
         print("  [answer quality] Useful ✓ → END")
         return "useful"
