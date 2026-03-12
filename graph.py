@@ -19,6 +19,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from config import MAX_LOOP_STEPS
+from cost_tracker import track_cost
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
@@ -281,5 +282,6 @@ def run_pipeline(question: str) -> dict:
         "steps": [],
         "loop_step": 0,
     }
-    final_state = app.invoke(initial_state)
+    with track_cost():
+        final_state = app.invoke(initial_state)
     return final_state
