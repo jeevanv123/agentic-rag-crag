@@ -10,12 +10,27 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 
 from dotenv import load_dotenv
 
 # Load environment variables before any module uses API keys
 load_dotenv()
+
+
+def _configure_logging(verbose: bool = False) -> None:
+    """Configure root logger. Use --verbose for DEBUG, otherwise INFO."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Silence noisy third-party loggers unless in verbose mode
+    if not verbose:
+        for noisy in ("httpx", "httpcore", "openai", "chromadb", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Validation: fail fast if required keys are missing
@@ -64,12 +79,15 @@ EVAL_SAMPLES = [
 # CLI actions
 # ---------------------------------------------------------------------------
 
+_log = logging.getLogger(__name__)
+
+
 def ingest(urls=None) -> None:
     from vector_store import load_and_index_urls
     target_urls = urls or SAMPLE_URLS
-    print(f"Ingesting {len(target_urls)} URLs into ChromaDB…")
+    _log.info("Ingesting %d URLs into ChromaDB…", len(target_urls))
     load_and_index_urls(target_urls)
-    print("Ingestion complete.")
+    _log.info("Ingestion complete.")
 
 
 def answer(question: str) -> str:
@@ -134,8 +152,6 @@ def interactive() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    _check_env()
-
     parser = argparse.ArgumentParser(
         description="Agentic RAG with CRAG + Self-RAG self-correction"
     )
@@ -143,7 +159,11 @@ def main() -> None:
     parser.add_argument("--eval", action="store_true", help="Run RAGAS evaluation")
     parser.add_argument("--question", "-q", type=str, help="Answer a single question")
     parser.add_argument("--visualise", action="store_true", help="Save graph diagram")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
+
+    _configure_logging(verbose=args.verbose)
+    _check_env()
 
     if args.ingest:
         ingest()
