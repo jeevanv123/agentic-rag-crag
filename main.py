@@ -72,9 +72,9 @@ def ingest(urls=None) -> None:
     print("Ingestion complete.")
 
 
-def answer(question: str) -> str:
+def answer(question: str, chat_history: list | None = None) -> str:
     from graph import run_pipeline
-    result = run_pipeline(question)
+    result = run_pipeline(question, chat_history=chat_history)
     generation = result.get("generation", "No answer generated.")
     steps = result.get("steps", [])
     sources = list({
@@ -115,6 +115,7 @@ def visualise() -> None:
 
 def interactive() -> None:
     print("Agentic RAG + CRAG + Self-RAG  |  type 'exit' to quit\n")
+    chat_history: list = []
     while True:
         try:
             q = input("Question: ").strip()
@@ -126,7 +127,8 @@ def interactive() -> None:
         if q.lower() in {"exit", "quit", "q"}:
             print("Bye!")
             break
-        answer(q)
+        generation = answer(q, chat_history=chat_history)
+        chat_history.append((q, generation))
 
 
 # ---------------------------------------------------------------------------

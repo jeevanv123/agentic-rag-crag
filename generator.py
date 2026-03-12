@@ -21,14 +21,29 @@ _RAG_SYSTEM_PROMPT = (
 
 _RAG_HUMAN_TEMPLATE = (
     "Context:\n{context}\n\n"
+    "{history}"
     "Question: {question}\n\n"
     "Answer:"
 )
+
+_HISTORY_ITEM_TEMPLATE = "Q: {q}\nA: {a}\n\n"
+_HISTORY_HEADER = "Conversation so far:\n"
 
 
 def _format_docs(documents) -> str:
     """Concatenate document page_content into a single context string."""
     return "\n\n".join(doc.page_content for doc in documents)
+
+
+def _format_history(chat_history: list) -> str:
+    """Format (question, answer) pairs into a readable history block."""
+    if not chat_history:
+        return ""
+    items = "".join(
+        _HISTORY_ITEM_TEMPLATE.format(q=q, a=a)
+        for q, a in chat_history
+    )
+    return _HISTORY_HEADER + items + "\n"
 
 
 def build_generator():
@@ -67,13 +82,15 @@ def build_generator():
 _generator_chain = None
 
 
-def generate_answer(question: str, documents) -> str:
+def generate_answer(question: str, documents, chat_history: list | None = None) -> str:
     """
     High-level helper used by the graph node.
 
     Args:
-        question:  The user question.
-        documents: List of retrieved Document objects.
+        question:     The user question.
+        documents:    List of retrieved Document objects.
+        chat_history: Optional list of (question, answer) tuples from prior
+                      turns; injected into the prompt for conversational context.
 
     Returns:
         Generated answer string.
@@ -83,4 +100,9 @@ def generate_answer(question: str, documents) -> str:
         _generator_chain = build_generator()
 
     context = _format_docs(documents)
-    return _generator_chain.invoke({"question": question, "context": context})
+    history = _format_history(chat_history or [])
+    return _generator_chain.invoke({
+        "question": question,
+        "context": context,
+        "history": history,
+    })

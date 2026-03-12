@@ -126,13 +126,14 @@ def web_search_node(state: GraphState) -> GraphState:
 
 
 def generate(state: GraphState) -> GraphState:
-    """Generate an answer using the current documents as context."""
+    """Generate an answer using the current documents and conversation history."""
     print("---NODE: GENERATE---")
     question = state["question"]
     documents = state["documents"]
+    chat_history = state.get("chat_history", [])
     loop_step = state.get("loop_step", 0)
 
-    generation = generate_answer(question, documents)
+    generation = generate_answer(question, documents, chat_history=chat_history)
     print(f"  [generate] Answer (first 120 chars): {generation[:120]}...")
     return {
         "generation": generation,
@@ -140,6 +141,7 @@ def generate(state: GraphState) -> GraphState:
         "documents": documents,
         "steps": ["generate"],
         "loop_step": loop_step + 1,
+        "chat_history": chat_history,
     }
 
 
@@ -262,12 +264,18 @@ def get_app():
     return _app
 
 
-def run_pipeline(question: str) -> dict:
+def run_pipeline(
+    question: str,
+    chat_history: list | None = None,
+) -> dict:
     """
     Execute the full CRAG + Self-RAG pipeline for a single question.
 
     Args:
-        question: Natural language question.
+        question:     Natural language question.
+        chat_history: Optional list of (question, answer) tuples from prior
+                      turns in this session. Passed through to the generate
+                      node so the LLM can reference earlier context.
 
     Returns:
         Final graph state dict containing 'generation', 'documents', 'steps'.
@@ -280,6 +288,7 @@ def run_pipeline(question: str) -> dict:
         "web_search": "No",
         "steps": [],
         "loop_step": 0,
+        "chat_history": chat_history or [],
     }
     final_state = app.invoke(initial_state)
     return final_state
