@@ -14,6 +14,7 @@ Flow:
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
@@ -25,6 +26,8 @@ from query_rewriter import build_query_rewriter
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Build graders / chains once (module-level singletons)
@@ -68,6 +71,7 @@ def grade_documents(state: GraphState) -> GraphState:
     print("---NODE: GRADE DOCUMENTS---")
     question = state["question"]
     documents = state["documents"]
+    retrieved_count = len(documents)
 
     filtered_docs = []
     web_search_needed = "No"
@@ -86,6 +90,12 @@ def grade_documents(state: GraphState) -> GraphState:
     # If ALL docs were filtered out, force web search
     if not filtered_docs:
         web_search_needed = "Yes"
+
+    kept_count = len(filtered_docs)
+    logger.info(
+        "METRICS doc_grading | retrieved=%d | kept=%d | filtered=%d | web_search=%s",
+        retrieved_count, kept_count, retrieved_count - kept_count, web_search_needed,
+    )
 
     return {
         "documents": filtered_docs,
@@ -282,4 +292,18 @@ def run_pipeline(question: str) -> dict:
         "loop_step": 0,
     }
     final_state = app.invoke(initial_state)
+
+    steps = final_state.get("steps", [])
+    web_searched = "web_search" in steps
+    generation_attempts = final_state.get("loop_step", 0)
+    doc_count = len(final_state.get("documents", []))
+    logger.info(
+        "METRICS pipeline_summary | steps=%s | docs_in_context=%d | "
+        "web_search=%s | generation_attempts=%d",
+        " → ".join(steps),
+        doc_count,
+        web_searched,
+        generation_attempts,
+    )
+
     return final_state
