@@ -185,44 +185,66 @@ def decide_to_generate(
     return "generate"
 
 
-def grade_generation(
-    state: GraphState,
-) -> Literal["generate", "transform_query", "useful"]:
+def _check_hallucination(state: GraphState) -> Literal["generate", "transform_query", "grounded"]:
     """
-    Self-RAG self-correction:
-      1. Check for hallucinations.
-      2. If grounded, check whether the answer resolves the question.
+    Self-RAG step 1: verify the generation is grounded in the retrieved docs.
+
+    Returns:
+        'grounded'         — no hallucination detected, proceed to quality check.
+        'generate'         — hallucinated but retries remain, try generating again.
+        'transform_query'  — hallucinated and retries exhausted, fall back to web search.
     """
-    print("---EDGE: GRADE GENERATION---")
-    question = state["question"]
-    documents = state["documents"]
     generation = state["generation"]
+    documents = state["documents"]
     generation_attempts = state.get("generation_attempts", 0)
 
-    # --- Hallucination check ---
     docs_text = "\n\n".join(d.page_content for d in documents)
     hall_score = _grade_hallucination(docs_text, generation)
-    grounded = hall_score.binary_score.lower() == "yes"
 
-    if not grounded:
-        print("  [hallucination] NOT grounded.")
+    if hall_score.binary_score.lower() != "yes":
         if generation_attempts < MAX_LOOP_STEPS:
-            print(f"  → generate (retry {generation_attempts}/{MAX_LOOP_STEPS})")
+            print(f"  [hallucination] NOT grounded — retry {generation_attempts}/{MAX_LOOP_STEPS} → generate")
             return "generate"
-        else:
-            print("  → transform_query (max retries reached, falling back to web search)")
-            return "transform_query"
+        print("  [hallucination] NOT grounded — max retries reached → transform_query")
+        return "transform_query"
 
     print("  [hallucination] Grounded ✓")
+    return "grounded"
 
-    # --- Answer quality check ---
+
+def _check_answer_quality(state: GraphState) -> Literal["useful", "transform_query"]:
+    """
+    Self-RAG step 2: verify the grounded answer actually resolves the question.
+
+    Returns:
+        'useful'           — answer resolves the question, pipeline can end.
+        'transform_query'  — answer is unhelpful, fall back to web search.
+    """
+    question = state["question"]
+    generation = state["generation"]
+
     ans_score = _grade_answer(question, generation)
     if ans_score.binary_score.lower() == "yes":
         print("  [answer quality] Useful ✓ → END")
         return "useful"
-    else:
-        print("  [answer quality] Not useful → transform_query")
-        return "transform_query"
+    print("  [answer quality] Not useful → transform_query")
+    return "transform_query"
+
+
+def grade_generation(
+    state: GraphState,
+) -> Literal["generate", "transform_query", "useful"]:
+    """
+    Self-RAG self-correction entry point — composes hallucination and quality checks.
+
+      1. _check_hallucination: is the answer grounded in the documents?
+      2. _check_answer_quality: does the grounded answer resolve the question?
+    """
+    print("---EDGE: GRADE GENERATION---")
+    hallucination_result = _check_hallucination(state)
+    if hallucination_result != "grounded":
+        return hallucination_result  # type: ignore[return-value]
+    return _check_answer_quality(state)
 
 
 # ---------------------------------------------------------------------------
