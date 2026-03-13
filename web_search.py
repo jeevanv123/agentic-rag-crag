@@ -12,6 +12,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.documents import Document
 
 from config import TAVILY_MAX_RESULTS
+from retry import with_retry
 
 
 def build_web_search_tool() -> TavilySearchResults:
@@ -19,6 +20,7 @@ def build_web_search_tool() -> TavilySearchResults:
     return TavilySearchResults(max_results=TAVILY_MAX_RESULTS)
 
 
+@with_retry
 def run_web_search(query: str) -> List[Document]:
     """
     Execute a Tavily web search and convert results to Documents.
