@@ -10,6 +10,7 @@ Metrics evaluated:
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 import pandas as pd
@@ -29,6 +30,8 @@ from config import (
     GRADER_MODEL, AZURE_EMBEDDING_DEPLOYMENT,
 )
 from graph import run_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +110,7 @@ def evaluate_pipeline(
     ragas_samples: List[SingleTurnSample] = []
 
     for sample in samples:
-        print(f"\n[evaluator] Running pipeline for: '{sample.question}'")
+        logger.info("Running pipeline for: %r", sample.question)
         result = run_pipeline(sample.question)
 
         retrieved_contexts = (
@@ -126,7 +129,7 @@ def evaluate_pipeline(
 
     dataset = EvaluationDataset(samples=ragas_samples)
 
-    print("\n[evaluator] Running RAGAS evaluation…")
+    logger.info("Running RAGAS evaluation on %d samples…", len(ragas_samples))
     ragas_result = evaluate(
         dataset=dataset,
         metrics=metrics,
