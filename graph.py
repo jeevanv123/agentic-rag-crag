@@ -14,6 +14,7 @@ Flow:
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
@@ -26,6 +27,8 @@ from retry import with_retry
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Build graders / chains once (module-level singletons)
@@ -74,9 +77,10 @@ def _rewrite_query(question: str) -> str:
 
 def retrieve(state: GraphState) -> GraphState:
     """Retrieve documents from ChromaDB for the given question."""
-    print("---NODE: RETRIEVE---")
     question = state["question"]
+    logger.info("NODE retrieve | question=%r", question)
     documents = _get_retriever().invoke(question)
+    logger.debug("NODE retrieve | fetched %d docs", len(documents))
     return {
         "documents": documents,
         "question": question,
@@ -90,26 +94,31 @@ def grade_documents(state: GraphState) -> GraphState:
     CRAG step: grade each retrieved document for relevance.
     Sets web_search="Yes" if filtering removes all documents.
     """
-    print("---NODE: GRADE DOCUMENTS---")
     question = state["question"]
     documents = state["documents"]
+    logger.info("NODE grade_documents | grading %d docs", len(documents))
 
     filtered_docs = []
     web_search_needed = "No"
 
     for doc in documents:
         score = _grade_document(question, doc.page_content)
+        source = doc.metadata.get("source", "unknown")
         if score.binary_score.lower() == "yes":
-            print(f"  [grade] RELEVANT: {doc.metadata.get('source', 'unknown')}")
+            logger.debug("NODE grade_documents | RELEVANT: %s", source)
             filtered_docs.append(doc)
         else:
-            print(f"  [grade] NOT RELEVANT: {doc.metadata.get('source', 'unknown')}")
+            logger.debug("NODE grade_documents | NOT RELEVANT: %s", source)
             web_search_needed = "Yes"
 
     # If ALL docs were filtered out, force web search
     if not filtered_docs:
         web_search_needed = "Yes"
 
+    logger.info(
+        "NODE grade_documents | kept %d/%d docs | web_search=%s",
+        len(filtered_docs), len(documents), web_search_needed,
+    )
     return {
         "documents": filtered_docs,
         "question": question,
@@ -121,10 +130,10 @@ def grade_documents(state: GraphState) -> GraphState:
 
 def transform_query(state: GraphState) -> GraphState:
     """Rewrite the question for a better web search."""
-    print("---NODE: TRANSFORM QUERY---")
     question = state["question"]
+    logger.info("NODE transform_query | rewriting question")
     better_question = _rewrite_query(question)
-    print(f"  [rewrite] '{question}' → '{better_question}'")
+    logger.info("NODE transform_query | %r → %r", question, better_question)
     return {
         "question": better_question,
         "documents": state.get("documents", []),
@@ -135,11 +144,13 @@ def transform_query(state: GraphState) -> GraphState:
 
 def web_search_node(state: GraphState) -> GraphState:
     """Execute Tavily web search and append results to documents."""
-    print("---NODE: WEB SEARCH---")
     question = state["question"]
+    logger.info("NODE web_search | query=%r", question)
     web_docs = run_web_search(question)
     # Merge with any remaining relevant docs from vector store
     existing = state.get("documents", [])
+    total = len(existing) + len(web_docs)
+    logger.info("NODE web_search | %d web docs + %d existing = %d total", len(web_docs), len(existing), total)
     return {
         "documents": existing + web_docs,
         "question": question,
@@ -150,13 +161,13 @@ def web_search_node(state: GraphState) -> GraphState:
 
 def generate(state: GraphState) -> GraphState:
     """Generate an answer using the current documents as context."""
-    print("---NODE: GENERATE---")
     question = state["question"]
     documents = state["documents"]
     generation_attempts = state.get("generation_attempts", 0)
+    logger.info("NODE generate | attempt=%d | docs=%d", generation_attempts + 1, len(documents))
 
     generation = generate_answer(question, documents)
-    print(f"  [generate] Answer (first 120 chars): {generation[:120]}...")
+    logger.debug("NODE generate | answer[:120]=%r", generation[:120])
     return {
         "generation": generation,
         "question": question,
@@ -177,11 +188,10 @@ def decide_to_generate(
     After grading: if web search is needed, rewrite query first;
     otherwise go straight to generation.
     """
-    print("---EDGE: DECIDE TO GENERATE---")
     if state.get("web_search") == "Yes":
-        print("  → transform_query (web search required)")
+        logger.info("EDGE decide_to_generate | → transform_query (web search required)")
         return "transform_query"
-    print("  → generate")
+    logger.info("EDGE decide_to_generate | → generate")
     return "generate"
 
 
@@ -203,12 +213,17 @@ def _check_hallucination(state: GraphState) -> Literal["generate", "transform_qu
 
     if hall_score.binary_score.lower() != "yes":
         if generation_attempts < MAX_LOOP_STEPS:
-            print(f"  [hallucination] NOT grounded — retry {generation_attempts}/{MAX_LOOP_STEPS} → generate")
+            logger.warning(
+                "EDGE hallucination_check | NOT grounded | retry %d/%d → generate",
+                generation_attempts, MAX_LOOP_STEPS,
+            )
             return "generate"
-        print("  [hallucination] NOT grounded — max retries reached → transform_query")
+        logger.warning(
+            "EDGE hallucination_check | NOT grounded | max retries reached → transform_query"
+        )
         return "transform_query"
 
-    print("  [hallucination] Grounded ✓")
+    logger.info("EDGE hallucination_check | grounded")
     return "grounded"
 
 
@@ -225,9 +240,9 @@ def _check_answer_quality(state: GraphState) -> Literal["useful", "transform_que
 
     ans_score = _grade_answer(question, generation)
     if ans_score.binary_score.lower() == "yes":
-        print("  [answer quality] Useful ✓ → END")
+        logger.info("EDGE answer_quality_check | useful → END")
         return "useful"
-    print("  [answer quality] Not useful → transform_query")
+    logger.info("EDGE answer_quality_check | not useful → transform_query")
     return "transform_query"
 
 
@@ -240,7 +255,7 @@ def grade_generation(
       1. _check_hallucination: is the answer grounded in the documents?
       2. _check_answer_quality: does the grounded answer resolve the question?
     """
-    print("---EDGE: GRADE GENERATION---")
+    logger.info("EDGE grade_generation | generation_attempts=%d", state.get("generation_attempts", 0))
     hallucination_result = _check_hallucination(state)
     if hallucination_result != "grounded":
         return hallucination_result  # type: ignore[return-value]

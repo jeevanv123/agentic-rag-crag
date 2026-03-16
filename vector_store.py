@@ -4,6 +4,7 @@ ChromaDB vector store — document ingestion and similarity retrieval.
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import chromadb
@@ -18,6 +19,8 @@ from config import (
     CHROMA_PERSIST_DIR,
     RETRIEVAL_K,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _get_embeddings() -> AzureOpenAIEmbeddings:
@@ -54,7 +57,7 @@ def ingest_documents(documents: List[Document]) -> Chroma:
         collection_name=CHROMA_COLLECTION_NAME,
         persist_directory=CHROMA_PERSIST_DIR,
     )
-    print(f"[vector_store] Ingested {len(documents)} document chunks into ChromaDB.")
+    logger.info("Ingested %d document chunks into ChromaDB.", len(documents))
     return vector_store
 
 
@@ -83,8 +86,10 @@ def load_and_index_urls(urls: List[str]) -> Chroma:
 
     loader = WebBaseLoader(urls)
     raw_docs = loader.load()
+    logger.info("Loaded %d raw documents from %d URLs.", len(raw_docs), len(urls))
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(raw_docs)
+    logger.info("Split into %d chunks (chunk_size=500, overlap=100).", len(chunks))
 
     return ingest_documents(chunks)

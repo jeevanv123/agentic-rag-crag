@@ -6,6 +6,7 @@ Returns LangChain Document objects so they slot directly into the graph state.
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -13,6 +14,8 @@ from langchain_core.documents import Document
 
 from config import TAVILY_MAX_RESULTS
 from retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 def build_web_search_tool() -> TavilySearchResults:
@@ -42,5 +45,5 @@ def run_web_search(query: str) -> List[Document]:
         )
         documents.append(doc)
 
-    print(f"[web_search] Retrieved {len(documents)} results for query: '{query}'")
+    logger.info("Retrieved %d results for query: %r", len(documents), query)
     return documents
