@@ -27,6 +27,7 @@ load_dotenv()
 
 def _configure_logging(verbose: bool = False) -> None:
     """Configure root logger with request ID injection and --verbose support."""
+    from request_context import RequestIdFilter
     level = logging.DEBUG if verbose else logging.INFO
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter(
@@ -54,6 +55,10 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _REQUIRED_ENV = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "TAVILY_API_KEY"]
 
+_QUESTION_MIN_LEN = 3
+_QUESTION_MAX_LEN = 500
+
+
 
 def _check_env() -> None:
     missing = [k for k in _REQUIRED_ENV if not os.getenv(k)]
@@ -62,6 +67,28 @@ def _check_env() -> None:
             f"Missing required environment variables: {', '.join(missing)}\n"
             "Copy .env.example to .env and fill in your API keys."
         )
+
+
+def _validate_question(question: str) -> str:
+    """
+    Sanitise and validate a user question before it enters the pipeline.
+
+    Returns the stripped question on success.
+    Raises ValueError with a user-friendly message on failure.
+    """
+    q = question.strip()
+    if not q:
+        raise ValueError("Question must not be empty.")
+    if len(q) < _QUESTION_MIN_LEN:
+        raise ValueError(
+            f"Question is too short (minimum {_QUESTION_MIN_LEN} characters)."
+        )
+    if len(q) > _QUESTION_MAX_LEN:
+        raise ValueError(
+            f"Question is too long ({len(q)} chars). "
+            f"Please keep it under {_QUESTION_MAX_LEN} characters."
+        )
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +124,9 @@ EVAL_SAMPLES = [
 # CLI actions
 # ---------------------------------------------------------------------------
 
+_log = logging.getLogger(__name__)
+
+
 def ingest(urls=None) -> None:
     from vector_store import load_and_index_urls
     target_urls = urls or SAMPLE_URLS
@@ -107,9 +137,10 @@ def ingest(urls=None) -> None:
 
 def answer(question: str) -> str:
     from graph import run_pipeline
+    from request_context import set_request_id
+    question = _validate_question(question)
     rid = set_request_id()
     _log.info("Pipeline start | request_id=%s | question=%r", rid, question)
-
     result = run_pipeline(question)
 
     generation = result.get("generation", "No answer generated.")
@@ -164,7 +195,10 @@ def interactive() -> None:
         if q.lower() in {"exit", "quit", "q"}:
             print("Bye!")
             break
-        answer(q)
+        try:
+            answer(q)
+        except ValueError as exc:
+            print(f"Invalid question: {exc}")
 
 
 # ---------------------------------------------------------------------------
