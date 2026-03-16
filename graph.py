@@ -23,6 +23,7 @@ from config import MAX_LOOP_STEPS
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
+from retry import with_retry
 from state import GraphState
 from vector_store import get_retriever
 from web_search import run_web_search
@@ -47,6 +48,30 @@ def _get_retriever():
 
 
 # ---------------------------------------------------------------------------
+# Retry-protected wrappers around chain .invoke() calls
+# ---------------------------------------------------------------------------
+
+@with_retry
+def _grade_document(question: str, document: str):
+    return _doc_grader.invoke({"question": question, "document": document})
+
+
+@with_retry
+def _grade_hallucination(documents: str, generation: str):
+    return _hallucination_grader.invoke({"documents": documents, "generation": generation})
+
+
+@with_retry
+def _grade_answer(question: str, generation: str):
+    return _answer_grader.invoke({"question": question, "generation": generation})
+
+
+@with_retry
+def _rewrite_query(question: str) -> str:
+    return _query_rewriter.invoke({"question": question})
+
+
+# ---------------------------------------------------------------------------
 # Node functions
 # ---------------------------------------------------------------------------
 
@@ -60,7 +85,7 @@ def retrieve(state: GraphState) -> GraphState:
         "documents": documents,
         "question": question,
         "steps": ["retrieve"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -77,9 +102,7 @@ def grade_documents(state: GraphState) -> GraphState:
     web_search_needed = "No"
 
     for doc in documents:
-        score = _doc_grader.invoke(
-            {"question": question, "document": doc.page_content}
-        )
+        score = _grade_document(question, doc.page_content)
         source = doc.metadata.get("source", "unknown")
         if score.binary_score.lower() == "yes":
             logger.debug("NODE grade_documents | RELEVANT: %s", source)
@@ -101,7 +124,7 @@ def grade_documents(state: GraphState) -> GraphState:
         "question": question,
         "web_search": web_search_needed,
         "steps": ["grade_documents"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -109,13 +132,13 @@ def transform_query(state: GraphState) -> GraphState:
     """Rewrite the question for a better web search."""
     question = state["question"]
     logger.info("NODE transform_query | rewriting question")
-    better_question = _query_rewriter.invoke({"question": question})
+    better_question = _rewrite_query(question)
     logger.info("NODE transform_query | %r → %r", question, better_question)
     return {
         "question": better_question,
         "documents": state.get("documents", []),
         "steps": ["transform_query"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -132,7 +155,7 @@ def web_search_node(state: GraphState) -> GraphState:
         "documents": existing + web_docs,
         "question": question,
         "steps": ["web_search"],
-        "loop_step": state.get("loop_step", 0),
+        "generation_attempts": state.get("generation_attempts", 0),
     }
 
 
@@ -140,8 +163,8 @@ def generate(state: GraphState) -> GraphState:
     """Generate an answer using the current documents as context."""
     question = state["question"]
     documents = state["documents"]
-    loop_step = state.get("loop_step", 0)
-    logger.info("NODE generate | attempt=%d | docs=%d", loop_step + 1, len(documents))
+    generation_attempts = state.get("generation_attempts", 0)
+    logger.info("NODE generate | attempt=%d | docs=%d", generation_attempts + 1, len(documents))
 
     generation = generate_answer(question, documents)
     logger.debug("NODE generate | answer[:120]=%r", generation[:120])
@@ -150,7 +173,7 @@ def generate(state: GraphState) -> GraphState:
         "question": question,
         "documents": documents,
         "steps": ["generate"],
-        "loop_step": loop_step + 1,
+        "generation_attempts": generation_attempts + 1,
     }
 
 
@@ -172,53 +195,50 @@ def decide_to_generate(
     return "generate"
 
 
-def _check_hallucination(
-    state: GraphState,
-) -> Literal["generate", "transform_query", "grounded"]:
+def _check_hallucination(state: GraphState) -> Literal["generate", "transform_query", "grounded"]:
     """
     Self-RAG step 1: verify the generation is grounded in the retrieved docs.
-    Returns 'grounded' to proceed to answer quality check, or a routing key to
-    retry/fall back.
+
+    Returns:
+        'grounded'         — no hallucination detected, proceed to quality check.
+        'generate'         — hallucinated but retries remain, try generating again.
+        'transform_query'  — hallucinated and retries exhausted, fall back to web search.
     """
     generation = state["generation"]
     documents = state["documents"]
-    loop_step = state.get("loop_step", 0)
+    generation_attempts = state.get("generation_attempts", 0)
 
     docs_text = "\n\n".join(d.page_content for d in documents)
-    hall_score = _hallucination_grader.invoke(
-        {"documents": docs_text, "generation": generation}
-    )
-    grounded = hall_score.binary_score.lower() == "yes"
+    hall_score = _grade_hallucination(docs_text, generation)
 
-    if not grounded:
-        if loop_step < MAX_LOOP_STEPS:
+    if hall_score.binary_score.lower() != "yes":
+        if generation_attempts < MAX_LOOP_STEPS:
             logger.warning(
                 "EDGE hallucination_check | NOT grounded | retry %d/%d → generate",
-                loop_step, MAX_LOOP_STEPS,
+                generation_attempts, MAX_LOOP_STEPS,
             )
             return "generate"
-        else:
-            logger.warning(
-                "EDGE hallucination_check | NOT grounded | max retries reached → transform_query"
-            )
-            return "transform_query"
+        logger.warning(
+            "EDGE hallucination_check | NOT grounded | max retries reached → transform_query"
+        )
+        return "transform_query"
 
     logger.info("EDGE hallucination_check | grounded")
     return "grounded"
 
 
-def _check_answer_quality(
-    state: GraphState,
-) -> Literal["useful", "transform_query"]:
+def _check_answer_quality(state: GraphState) -> Literal["useful", "transform_query"]:
     """
     Self-RAG step 2: verify the grounded answer actually resolves the question.
+
+    Returns:
+        'useful'           — answer resolves the question, pipeline can end.
+        'transform_query'  — answer is unhelpful, fall back to web search.
     """
     question = state["question"]
     generation = state["generation"]
 
-    ans_score = _answer_grader.invoke(
-        {"question": question, "generation": generation}
-    )
+    ans_score = _grade_answer(question, generation)
     if ans_score.binary_score.lower() == "yes":
         logger.info("EDGE answer_quality_check | useful → END")
         return "useful"
@@ -230,11 +250,12 @@ def grade_generation(
     state: GraphState,
 ) -> Literal["generate", "transform_query", "useful"]:
     """
-    Self-RAG self-correction:
-      1. Check for hallucinations.
-      2. If grounded, check whether the answer resolves the question.
+    Self-RAG self-correction entry point — composes hallucination and quality checks.
+
+      1. _check_hallucination: is the answer grounded in the documents?
+      2. _check_answer_quality: does the grounded answer resolve the question?
     """
-    logger.info("EDGE grade_generation | loop_step=%d", state.get("loop_step", 0))
+    logger.info("EDGE grade_generation | generation_attempts=%d", state.get("generation_attempts", 0))
     hallucination_result = _check_hallucination(state)
     if hallucination_result != "grounded":
         return hallucination_result  # type: ignore[return-value]
@@ -314,7 +335,7 @@ def run_pipeline(question: str) -> dict:
         "documents": [],
         "web_search": "No",
         "steps": [],
-        "loop_step": 0,
+        "generation_attempts": 0,
     }
     final_state = app.invoke(initial_state)
     return final_state

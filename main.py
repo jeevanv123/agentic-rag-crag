@@ -37,6 +37,10 @@ def _configure_logging(verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 _REQUIRED_ENV = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "TAVILY_API_KEY"]
 
+_QUESTION_MIN_LEN = 3
+_QUESTION_MAX_LEN = 500
+
+
 def _check_env() -> None:
     missing = [k for k in _REQUIRED_ENV if not os.getenv(k)]
     if missing:
@@ -44,6 +48,28 @@ def _check_env() -> None:
             f"Missing required environment variables: {', '.join(missing)}\n"
             "Copy .env.example to .env and fill in your API keys."
         )
+
+
+def _validate_question(question: str) -> str:
+    """
+    Sanitise and validate a user question before it enters the pipeline.
+
+    Returns the stripped question on success.
+    Raises ValueError with a user-friendly message on failure.
+    """
+    q = question.strip()
+    if not q:
+        raise ValueError("Question must not be empty.")
+    if len(q) < _QUESTION_MIN_LEN:
+        raise ValueError(
+            f"Question is too short (minimum {_QUESTION_MIN_LEN} characters)."
+        )
+    if len(q) > _QUESTION_MAX_LEN:
+        raise ValueError(
+            f"Question is too long ({len(q)} chars). "
+            f"Please keep it under {_QUESTION_MAX_LEN} characters."
+        )
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +118,7 @@ def ingest(urls=None) -> None:
 
 def answer(question: str) -> str:
     from graph import run_pipeline
+    question = _validate_question(question)
     result = run_pipeline(question)
     generation = result.get("generation", "No answer generated.")
     steps = result.get("steps", [])
@@ -144,7 +171,10 @@ def interactive() -> None:
         if q.lower() in {"exit", "quit", "q"}:
             print("Bye!")
             break
-        answer(q)
+        try:
+            answer(q)
+        except ValueError as exc:
+            print(f"Invalid question: {exc}")
 
 
 # ---------------------------------------------------------------------------

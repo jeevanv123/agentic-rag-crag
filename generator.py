@@ -10,6 +10,7 @@ from config import (
     AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION,
     GENERATOR_MODEL, GENERATOR_TEMPERATURE,
 )
+from retry import with_retry
 
 
 _RAG_SYSTEM_PROMPT = (
@@ -67,6 +68,7 @@ def build_generator():
 _generator_chain = None
 
 
+@with_retry
 def generate_answer(question: str, documents) -> str:
     """
     High-level helper used by the graph node.
