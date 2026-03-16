@@ -23,6 +23,7 @@ from config import MAX_LOOP_STEPS
 from generator import generate_answer
 from graders import build_document_grader, build_hallucination_grader, build_answer_grader
 from query_rewriter import build_query_rewriter
+from request_context import set_request_id
 from retry import with_retry
 from state import GraphState
 from vector_store import get_retriever
@@ -318,16 +319,19 @@ def get_app():
     return _app
 
 
-def run_pipeline(question: str) -> dict:
+def run_pipeline(question: str, request_id: str | None = None) -> dict:
     """
     Execute the full CRAG + Self-RAG pipeline for a single question.
 
     Args:
-        question: Natural language question.
+        question:   Natural language question.
+        request_id: Optional request ID for log tracing. A new one is
+                    generated if not provided.
 
     Returns:
         Final graph state dict containing 'generation', 'documents', 'steps'.
     """
+    set_request_id(request_id)
     app = get_app()
     initial_state: GraphState = {
         "question": question,

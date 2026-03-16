@@ -7,6 +7,7 @@ Usage:
     python main.py --eval                   # run RAGAS evaluation suite
     python main.py --question "your query"  # single-shot answer
     python main.py --visualise              # print the graph structure
+    python main.py --verbose                # enable DEBUG logging
 """
 
 import argparse
@@ -14,23 +15,40 @@ import logging
 import os
 
 from dotenv import load_dotenv
+from request_context import RequestIdFilter, set_request_id
 
 # Load environment variables before any module uses API keys
 load_dotenv()
 
 
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
 def _configure_logging(verbose: bool = False) -> None:
-    """Configure root logger. Use --verbose for DEBUG, otherwise INFO."""
+    """Configure root logger with request ID injection and --verbose support."""
+    from request_context import RequestIdFilter
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | [%(request_id)s] | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
-    )
+    ))
+    handler.addFilter(RequestIdFilter())
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(handler)
+
     # Silence noisy third-party loggers unless in verbose mode
     if not verbose:
         for noisy in ("httpx", "httpcore", "openai", "chromadb", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+_log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Validation: fail fast if required keys are missing
@@ -39,6 +57,7 @@ _REQUIRED_ENV = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "TAVILY_API_KE
 
 _QUESTION_MIN_LEN = 3
 _QUESTION_MAX_LEN = 500
+
 
 
 def _check_env() -> None:
@@ -118,8 +137,12 @@ def ingest(urls=None) -> None:
 
 def answer(question: str) -> str:
     from graph import run_pipeline
+    from request_context import set_request_id
     question = _validate_question(question)
+    rid = set_request_id()
+    _log.info("Pipeline start | request_id=%s | question=%r", rid, question)
     result = run_pipeline(question)
+
     generation = result.get("generation", "No answer generated.")
     steps = result.get("steps", [])
     sources = list({
@@ -127,6 +150,7 @@ def answer(question: str) -> str:
         for doc in result.get("documents", [])
     })
 
+    _log.info("Pipeline complete | steps=%s", " → ".join(steps))
     print("\n" + "=" * 60)
     print(f"Question : {question}")
     print(f"Answer   : {generation}")
