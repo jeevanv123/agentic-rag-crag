@@ -7,15 +7,48 @@ Usage:
     python main.py --eval                   # run RAGAS evaluation suite
     python main.py --question "your query"  # single-shot answer
     python main.py --visualise              # print the graph structure
+    python main.py --verbose                # enable DEBUG logging
 """
 
 import argparse
+import logging
 import os
 
 from dotenv import load_dotenv
+from request_context import RequestIdFilter, set_request_id
 
 # Load environment variables before any module uses API keys
 load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+def _configure_logging(verbose: bool = False) -> None:
+    """Configure root logger with request ID injection and --verbose support."""
+    from request_context import RequestIdFilter
+    level = logging.DEBUG if verbose else logging.INFO
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | [%(request_id)s] | %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    handler.addFilter(RequestIdFilter())
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(handler)
+
+    # Silence noisy third-party loggers unless in verbose mode
+    if not verbose:
+        for noisy in ("httpx", "httpcore", "openai", "chromadb", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+_log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # LangSmith tracing — activated automatically when env vars are present
@@ -56,6 +89,11 @@ def _setup_langsmith() -> None:
 # ---------------------------------------------------------------------------
 _REQUIRED_ENV = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "TAVILY_API_KEY"]
 
+_QUESTION_MIN_LEN = 3
+_QUESTION_MAX_LEN = 500
+
+
+
 def _check_env() -> None:
     missing = [k for k in _REQUIRED_ENV if not os.getenv(k)]
     if missing:
@@ -63,6 +101,28 @@ def _check_env() -> None:
             f"Missing required environment variables: {', '.join(missing)}\n"
             "Copy .env.example to .env and fill in your API keys."
         )
+
+
+def _validate_question(question: str) -> str:
+    """
+    Sanitise and validate a user question before it enters the pipeline.
+
+    Returns the stripped question on success.
+    Raises ValueError with a user-friendly message on failure.
+    """
+    q = question.strip()
+    if not q:
+        raise ValueError("Question must not be empty.")
+    if len(q) < _QUESTION_MIN_LEN:
+        raise ValueError(
+            f"Question is too short (minimum {_QUESTION_MIN_LEN} characters)."
+        )
+    if len(q) > _QUESTION_MAX_LEN:
+        raise ValueError(
+            f"Question is too long ({len(q)} chars). "
+            f"Please keep it under {_QUESTION_MAX_LEN} characters."
+        )
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -98,17 +158,25 @@ EVAL_SAMPLES = [
 # CLI actions
 # ---------------------------------------------------------------------------
 
+_log = logging.getLogger(__name__)
+
+
 def ingest(urls=None) -> None:
     from vector_store import load_and_index_urls
     target_urls = urls or SAMPLE_URLS
-    print(f"Ingesting {len(target_urls)} URLs into ChromaDB…")
+    _log.info("Ingesting %d URLs into ChromaDB…", len(target_urls))
     load_and_index_urls(target_urls)
-    print("Ingestion complete.")
+    _log.info("Ingestion complete.")
 
 
 def answer(question: str) -> str:
     from graph import run_pipeline
+    from request_context import set_request_id
+    question = _validate_question(question)
+    rid = set_request_id()
+    _log.info("Pipeline start | request_id=%s | question=%r", rid, question)
     result = run_pipeline(question)
+
     generation = result.get("generation", "No answer generated.")
     steps = result.get("steps", [])
     sources = list({
@@ -116,6 +184,7 @@ def answer(question: str) -> str:
         for doc in result.get("documents", [])
     })
 
+    _log.info("Pipeline complete | steps=%s", " → ".join(steps))
     print("\n" + "=" * 60)
     print(f"Question : {question}")
     print(f"Answer   : {generation}")
@@ -160,7 +229,10 @@ def interactive() -> None:
         if q.lower() in {"exit", "quit", "q"}:
             print("Bye!")
             break
-        answer(q)
+        try:
+            answer(q)
+        except ValueError as exc:
+            print(f"Invalid question: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +247,10 @@ def main() -> None:
     parser.add_argument("--eval", action="store_true", help="Run RAGAS evaluation")
     parser.add_argument("--question", "-q", type=str, help="Answer a single question")
     parser.add_argument("--visualise", action="store_true", help="Save graph diagram")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
 
+    _configure_logging(verbose=args.verbose)
     _check_env()
     _setup_langsmith()
 

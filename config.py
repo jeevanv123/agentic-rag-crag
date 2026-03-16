@@ -39,3 +39,9 @@ TAVILY_MAX_RESULTS: int = int(os.getenv("TAVILY_MAX_RESULTS", "3"))
 # Graph execution limits
 # ---------------------------------------------------------------------------
 MAX_LOOP_STEPS: int = int(os.getenv("MAX_LOOP_STEPS", "3"))
+
+# ---------------------------------------------------------------------------
+# Resilience
+# ---------------------------------------------------------------------------
+# Maximum attempts for any single external API call before giving up.
+MAX_API_RETRIES: int = int(os.getenv("MAX_API_RETRIES", "3"))
